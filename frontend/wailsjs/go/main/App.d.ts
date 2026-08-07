@@ -4,6 +4,8 @@ import {main} from '../models';
 
 export function Bootstrap():Promise<main.BootstrapData>;
 
+export function BrowserURL(arg1:string):Promise<main.OperationResult>;
+
 export function BuildSSHCommand(arg1:main.TunnelProfile):Promise<string>;
 
 export function CopyText(arg1:string):Promise<main.OperationResult>;
@@ -12,9 +14,13 @@ export function DeleteProfile(arg1:string):Promise<main.OperationResult>;
 
 export function ExportSafeConfig():Promise<string>;
 
+export function OpenProfileInBrowser(arg1:string):Promise<main.OperationResult>;
+
 export function ParseSSHCommand(arg1:string):Promise<main.ParseCommandResult>;
 
 export function PickPrivateKey():Promise<main.OperationResult>;
+
+export function RegisterNativeHost(arg1:string):Promise<main.NativeHostRegistrationResult>;
 
 export function SaveProfile(arg1:main.SaveProfileRequest):Promise<main.OperationResult>;
 

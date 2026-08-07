@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import {
   Bootstrap, CopyText, DeleteProfile, ParseSSHCommand, PickPrivateKey,
-  SaveProfile, StartTunnel, StopTunnel, TrustHost,
+  OpenProfileInBrowser, RegisterNativeHost, SaveProfile, StartTunnel, StopTunnel, TrustHost,
 } from '../wailsjs/go/main/App'
 import { EventsOff, EventsOn } from '../wailsjs/runtime/runtime'
 import { main } from '../wailsjs/go/models'
@@ -24,6 +24,8 @@ interface TunnelProfile {
   privateKeyPath: string
   rememberSecret: boolean
   autoReconnect: boolean
+  webService: boolean
+  webScheme: 'http' | 'https'
   createdAt: string
   updatedAt: string
 }
@@ -39,6 +41,7 @@ interface TunnelStatus {
   activeConnections: number
   connectedAt?: string
   hostKey?: HostKeyInfo
+  url?: string
 }
 interface OperationResult {
   ok: boolean
@@ -47,6 +50,14 @@ interface OperationResult {
   profile?: TunnelProfile
   status?: TunnelStatus
   hostKey?: HostKeyInfo
+}
+interface NativeHostRegistrationResult {
+  ok: boolean
+  code?: string
+  message?: string
+  extensionId?: string
+  manifestPath?: string
+  binaryPath?: string
 }
 
 const profiles = ref<ProfileView[]>([])
@@ -60,6 +71,9 @@ const toast = reactive({ visible: false, kind: 'success', message: '' })
 const importOpen = ref(false)
 const importCommand = ref('ssh -L 9108:127.0.0.1:9108 -p 33899 root@ssh.example.com')
 const configPath = ref('')
+const extensionId = ref('')
+const nativeHostBusy = ref(false)
+const nativeHostRegistration = ref<NativeHostRegistrationResult | null>(null)
 let toastTimer: number | undefined
 
 function blankProfile(): TunnelProfile {
@@ -67,6 +81,7 @@ function blankProfile(): TunnelProfile {
     id: '', name: '新建隧道', sshHost: '', sshPort: 22, username: 'root',
     localBind: '127.0.0.1', localPort: 9108, remoteHost: '127.0.0.1', remotePort: 9108,
     authMode: 'password', privateKeyPath: '', rememberSecret: false, autoReconnect: true,
+    webService: false, webScheme: 'http',
     createdAt: '', updatedAt: '',
   }
 }
@@ -88,6 +103,7 @@ const needsHostTrust = computed(() => currentStatus.value.state === 'host-key-re
 const broadBind = computed(() => ['0.0.0.0', '::'].includes(draft.localBind))
 const secretLabel = computed(() => draft.authMode === 'password' ? 'SSH 密码' : '私钥口令（未加密可留空）')
 const hasStoredSecret = computed(() => selectedProfile.value?.hasStoredSecret && draft.rememberSecret)
+const extensionIdValid = computed(() => /^[a-p]{32}$/.test(extensionId.value.trim()))
 const commandPreview = computed(() => {
   const bind = formatCommandHost(draft.localBind || '127.0.0.1')
   const remote = formatCommandHost(draft.remoteHost || '127.0.0.1')
@@ -194,6 +210,15 @@ async function stopCurrent() {
     busy.value = false
   }
 }
+async function openCurrentInBrowser() {
+  if (!draft.id || currentStatus.value.state !== 'running' || !draft.webService) return
+  try {
+    const result = await OpenProfileInBrowser(draft.id) as OperationResult
+    notify(result.message || '已使用默认浏览器打开', result.ok ? 'success' : 'error')
+  } catch (error) {
+    notify(String(error), 'error')
+  }
+}
 async function trustAndConnect() {
   if (!draft.id) return
   busy.value = true
@@ -260,6 +285,25 @@ async function copyCommand() {
     notify(String(error), 'error')
   }
 }
+async function registerChromeService() {
+  const normalizedId = extensionId.value.trim()
+  if (!/^[a-p]{32}$/.test(normalizedId)) {
+    notify('扩展 ID 必须是 32 位小写字母，且只能使用 a 到 p', 'error')
+    return
+  }
+  nativeHostBusy.value = true
+  try {
+    const result = await RegisterNativeHost(normalizedId) as NativeHostRegistrationResult
+    nativeHostRegistration.value = result
+    notify(result.message || (result.ok ? 'Chrome 服务已注册' : '注册失败'), result.ok ? 'success' : 'error')
+  } catch (error) {
+    const result = { ok: false, code: 'CALL_FAILED', message: String(error) }
+    nativeHostRegistration.value = result
+    notify(result.message, 'error')
+  } finally {
+    nativeHostBusy.value = false
+  }
+}
 function stateLabel(state: TunnelState): string {
   return {
     stopped: '已停止', connecting: '连接中', running: '运行中', reconnecting: '重连中',
@@ -323,6 +367,10 @@ onBeforeUnmount(() => {
       <header class="workspace-header">
         <div><p class="eyebrow">LOCAL FORWARD / SSH</p><h1>{{ draft.name || '未命名隧道' }}</h1></div>
         <div class="header-actions">
+          <button
+            v-if="currentStatus.state === 'running' && draft.webService"
+            class="button ghost" type="button" :disabled="busy" @click="openCurrentInBrowser"
+          >打开网页 ↗</button>
           <button class="button ghost" type="button" :disabled="busy || isRunning" @click="saveCurrent">保存配置</button>
           <button v-if="!isRunning" class="button primary" type="button" :disabled="busy" @click="startCurrent"><span class="play" aria-hidden="true">▶</span> 保存并启动</button>
           <button v-else class="button danger" type="button" :disabled="busy" @click="stopCurrent">■ 停止隧道</button>
@@ -425,8 +473,26 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
+        <section class="panel web-panel">
+          <div class="panel-heading"><span class="step">05</span><div><h2>网页快捷入口</h2><p>仅在用户点击后打开，不会自动跳转</p></div></div>
+          <div class="web-controls">
+            <label class="toggle-row">
+              <input v-model="draft.webService" :disabled="isRunning" type="checkbox">
+              <span class="toggle"></span>
+              <span><strong>这是网页服务</strong><small>启用后，连接成功时显示“打开网页”按钮</small></span>
+            </label>
+            <label v-if="draft.webService" class="field scheme-field">
+              <span>网页协议</span>
+              <select v-model="draft.webScheme" :disabled="isRunning">
+                <option value="http">HTTP</option>
+                <option value="https">HTTPS</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
         <section class="panel command-panel">
-          <div class="panel-heading"><span class="step">05</span><div><h2>等价命令</h2><p>用于核对配置，不会包含密码</p></div></div>
+          <div class="panel-heading"><span class="step">06</span><div><h2>等价命令</h2><p>用于核对配置，不会包含密码</p></div></div>
           <div class="command-box">
             <code>{{ commandPreview }}</code>
             <button type="button" aria-label="复制等价命令" title="复制" @click="copyCommand">复制</button>
@@ -434,6 +500,36 @@ onBeforeUnmount(() => {
           <div class="panel-footer">
             <span v-if="configPath">配置：{{ configPath }}</span>
             <button class="delete-link" type="button" :disabled="busy || isRunning" @click="removeCurrent">删除此配置</button>
+          </div>
+        </section>
+
+        <section class="panel browser-panel">
+          <div class="panel-heading"><span class="step">07</span><div><h2>Chrome 浏览器集成</h2><p>按扩展 ID 注册本机通信服务</p></div></div>
+          <div class="browser-registration">
+            <label class="field">
+              <span>Chrome 扩展 ID</span>
+              <input
+                v-model.trim="extensionId"
+                maxlength="32"
+                pattern="[a-p]{32}"
+                placeholder="例如：ipmjdganppehhljijcdndfjjmjjpalbp"
+                autocomplete="off"
+                spellcheck="false"
+              >
+            </label>
+            <button
+              class="button primary"
+              type="button"
+              :disabled="nativeHostBusy || !extensionIdValid"
+              @click="registerChromeService"
+            >{{ nativeHostBusy ? '注册中…' : '注册 Chrome 服务' }}</button>
+          </div>
+          <p class="browser-help">在 <code>chrome://extensions</code> 打开开发者模式即可复制扩展 ID。注册只允许该扩展访问 TunnelDeck；扩展 ID 变化后需要重新注册。</p>
+          <div v-if="nativeHostRegistration" class="registration-result" :data-ok="nativeHostRegistration.ok">
+            <strong>{{ nativeHostRegistration.ok ? '注册成功' : '注册失败' }}</strong>
+            <span>{{ nativeHostRegistration.message }}</span>
+            <code v-if="nativeHostRegistration.manifestPath">清单：{{ nativeHostRegistration.manifestPath }}</code>
+            <code v-if="nativeHostRegistration.binaryPath">程序：{{ nativeHostRegistration.binaryPath }}</code>
           </div>
         </section>
       </form>

@@ -76,6 +76,8 @@ export namespace main {
 	    privateKeyPath?: string;
 	    rememberSecret: boolean;
 	    autoReconnect: boolean;
+	    webService: boolean;
+	    webScheme?: string;
 	    createdAt: string;
 	    updatedAt: string;
 	    hasStoredSecret: boolean;
@@ -99,6 +101,8 @@ export namespace main {
 	        this.privateKeyPath = source["privateKeyPath"];
 	        this.rememberSecret = source["rememberSecret"];
 	        this.autoReconnect = source["autoReconnect"];
+	        this.webService = source["webService"];
+	        this.webScheme = source["webScheme"];
 	        this.createdAt = source["createdAt"];
 	        this.updatedAt = source["updatedAt"];
 	        this.hasStoredSecret = source["hasStoredSecret"];
@@ -142,7 +146,29 @@ export namespace main {
 		    return a;
 		}
 	}
-	
+
+		export class NativeHostRegistrationResult {
+	    ok: boolean;
+	    code?: string;
+	    message?: string;
+	    extensionId?: string;
+	    manifestPath?: string;
+	    binaryPath?: string;
+
+		    static createFrom(source: any = {}) {
+	        return new NativeHostRegistrationResult(source);
+	    }
+
+		    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.code = source["code"];
+	        this.message = source["message"];
+	        this.extensionId = source["extensionId"];
+	        this.manifestPath = source["manifestPath"];
+	        this.binaryPath = source["binaryPath"];
+	    }
+	}
 	export class TunnelProfile {
 	    id: string;
 	    name: string;
@@ -157,6 +183,8 @@ export namespace main {
 	    privateKeyPath?: string;
 	    rememberSecret: boolean;
 	    autoReconnect: boolean;
+	    webService: boolean;
+	    webScheme?: string;
 	    createdAt: string;
 	    updatedAt: string;
 	
@@ -179,6 +207,8 @@ export namespace main {
 	        this.privateKeyPath = source["privateKeyPath"];
 	        this.rememberSecret = source["rememberSecret"];
 	        this.autoReconnect = source["autoReconnect"];
+	        this.webService = source["webService"];
+	        this.webScheme = source["webScheme"];
 	        this.createdAt = source["createdAt"];
 	        this.updatedAt = source["updatedAt"];
 	    }
@@ -190,6 +220,7 @@ export namespace main {
 	    profile?: TunnelProfile;
 	    status?: TunnelStatus;
 	    hostKey?: HostKeyInfo;
+	    url?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new OperationResult(source);
@@ -203,6 +234,7 @@ export namespace main {
 	        this.profile = this.convertValues(source["profile"], TunnelProfile);
 	        this.status = this.convertValues(source["status"], TunnelStatus);
 	        this.hostKey = this.convertValues(source["hostKey"], HostKeyInfo);
+	        this.url = source["url"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -309,4 +341,3 @@ export namespace main {
 	
 
 }
-

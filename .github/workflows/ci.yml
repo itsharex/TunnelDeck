@@ -37,7 +37,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: |
+            frontend/package-lock.json
+            extension/package-lock.json
 
       - name: Install Linux build dependencies
         run: |
@@ -53,6 +55,14 @@ jobs:
         run: npm run build
         working-directory: frontend
 
+      - name: Install extension dependencies
+        run: npm ci
+        working-directory: extension
+
+      - name: Type-check and build Chrome extension
+        run: npm run build
+        working-directory: extension
+
       - name: Scan Git history for secrets
         run: go run github.com/zricethezav/gitleaks/v8@v8.30.1 git --redact --no-banner .
 
@@ -62,6 +72,25 @@ jobs:
       - name: Run Go vet
         run: go vet ./...
 
+      - name: Verify Native Messaging installer
+        run: |
+          sh -n \
+            scripts/install-from-source.sh \
+            scripts/install-native-host.sh \
+            scripts/uninstall-native-host.sh
+          test_dir=$(mktemp -d)
+          go build -o "$test_dir/TunnelDeck" .
+          TUNNELDECK_NATIVE_HOST_DIR="$test_dir/manifests" \
+            ./scripts/install-native-host.sh \
+            --extension-id aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+            --binary "$test_dir/TunnelDeck"
+          jq -e \
+            '.name == "com.tunneldeck.native" and
+             .allowed_origins == ["chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"]' \
+            "$test_dir/manifests/com.tunneldeck.native.json"
+          TUNNELDECK_NATIVE_HOST_DIR="$test_dir/manifests" \
+            ./scripts/uninstall-native-host.sh
+
       - name: Scan reachable Go vulnerabilities
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
@@ -69,8 +98,12 @@ jobs:
         run: npm audit --audit-level=high
         working-directory: frontend
 
-  package:
-    name: Package (${{ matrix.artifact }})
+      - name: Audit extension dependencies
+        run: npm audit --audit-level=high
+        working-directory: extension
+
+  build:
+    name: Build check (${{ matrix.platform }})
     needs: verify
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -79,11 +112,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
-            artifact: linux-amd64
+            platform: linux-amd64
           - os: windows-2025
-            artifact: windows-amd64
+            platform: windows-amd64
           - os: macos-15
-            artifact: macos-arm64
+            platform: macos-arm64
 
     steps:
       - name: Check out repository
@@ -120,39 +153,27 @@ jobs:
           go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-      - name: Build application
-        if: runner.os != 'Linux'
+      - name: Validate Windows source installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path scripts/install-from-source.ps1),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) { throw ($errors | Out-String) }
+
+      - name: Build macOS application
+        if: runner.os == 'macOS'
+        run: wails build -clean
+
+      - name: Build Windows application
+        if: runner.os == 'Windows'
         run: wails build -clean
 
       - name: Build Linux application
         if: runner.os == 'Linux'
         run: wails build -clean -tags webkit2_41
-
-      - name: Package macOS application
-        if: runner.os == 'macOS'
-        run: |
-          mkdir -p dist
-          ditto -c -k --sequesterRsrc --keepParent \
-            build/bin/TunnelDeck.app dist/TunnelDeck-macos-arm64.zip
-
-      - name: Package Windows application
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Compress-Archive -Path build/bin/TunnelDeck.exe `
-            -DestinationPath dist/TunnelDeck-windows-amd64.zip
-
-      - name: Package Linux application
-        if: runner.os == 'Linux'
-        run: |
-          mkdir -p dist
-          tar -C build/bin -czf dist/TunnelDeck-linux-amd64.tar.gz TunnelDeck
-
-      - name: Upload package
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: TunnelDeck-${{ matrix.artifact }}
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 14
