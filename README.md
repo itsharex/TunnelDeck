@@ -1,0 +1,131 @@
+# TunnelDeck
+
+[![CI](https://github.com/Nciae-Zyh/TunnelDeck/actions/workflows/ci.yml/badge.svg)](https://github.com/Nciae-Zyh/TunnelDeck/actions/workflows/ci.yml)
+[![Release](https://github.com/Nciae-Zyh/TunnelDeck/actions/workflows/release.yml/badge.svg)](https://github.com/Nciae-Zyh/TunnelDeck/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-5eead4.svg)](LICENSE)
+
+一个轻量、跨平台的 SSH 本地端口转发 GUI。它把下面这类命令变成可保存、可快速启停的隧道配置：
+
+```bash
+ssh -L 9108:127.0.0.1:9108 -p 33899 root@ssh.example.com
+```
+
+![TunnelDeck macOS 界面](build/screenshots/tunneldeck-macos.png)
+
+## 功能
+
+- 管理多个本地转发配置，显示运行状态和活动连接数
+- 直接粘贴并解析安全范围内的 `ssh -L` 命令
+- 密码认证、SSH 私钥认证、加密私钥口令
+- 密码默认不保存；勾选“记住凭据”后写入系统安全存储
+- 首次连接显示 SHA256 主机指纹，确认后写入应用独立的 `known_hosts`
+- 服务器主机密钥变化时阻止连接，避免静默接受中间人攻击
+- SSH keepalive、断线自动重连和 2–30 秒指数退避
+- 默认只监听 `127.0.0.1`；主动绑定 `0.0.0.0` 或 `::` 时显示暴露风险提示
+- macOS、Windows、Linux，支持 AMD64 与 ARM64
+
+## 为什么比较轻
+
+桌面层使用 Wails，界面使用系统 WebView，而不是随应用打包完整 Chromium。隧道由 Go 直接通过 `golang.org/x/crypto/ssh` 建立，不会拼接或执行 shell 命令。当前 macOS ARM64 应用包约 8.7 MB。
+
+## 使用
+
+1. 点击“新建”，或点击“导入命令”粘贴现有 `ssh -L` 命令。
+2. 填写 SSH 跳板机、用户名、本地入口和 SSH 服务器所能访问的目标地址。
+3. 选择“密码”或“SSH 私钥”：
+   - 密码模式：输入 SSH 登录密码。
+   - 私钥模式：选择私钥；私钥加密时再输入口令。
+4. 默认不要勾选“记住凭据”，凭据只在本次运行的内存中使用。
+5. 点击“保存并启动”。
+6. 首次连接会显示服务器的 SHA256 指纹。通过可信渠道核对后，再点击“信任并连接”。
+7. 使用 `127.0.0.1:本地端口` 访问远程服务。
+
+上面的示例命令对应：
+
+| 项目 | 值 |
+| --- | --- |
+| SSH 服务器 | `ssh.example.com:33899` |
+| SSH 用户 | `root` |
+| 本地入口 | `127.0.0.1:9108` |
+| SSH 内目标 | `127.0.0.1:9108` |
+
+这里的“远程目标地址”是从 SSH 服务器视角访问的地址。`127.0.0.1` 指 SSH 服务器自身，不是运行 TunnelDeck 的电脑。
+
+## 凭据与配置
+
+未勾选“记住凭据”时，密码或私钥口令不会写入磁盘，停止隧道后会从隧道对象中清除。
+
+勾选后，TunnelDeck 使用系统凭据存储：
+
+- macOS：Keychain
+- Windows：Credential Manager
+- Linux：Secret Service
+
+普通配置与应用独立 `known_hosts` 的位置由系统配置目录决定：
+
+- macOS：`~/Library/Application Support/TunnelDeck/`
+- Windows：`%AppData%\TunnelDeck\`
+- Linux：`$XDG_CONFIG_HOME/TunnelDeck/`，未设置时通常为 `~/.config/TunnelDeck/`
+
+`profiles.json` 不包含密码、口令或私钥内容。Unix 系统上配置文件权限为 `0600`，目录为 `0700`。
+
+## 本地开发
+
+要求：
+
+- Go 1.25 或更高版本
+- Node.js 20 或更高版本
+- Wails CLI 2.13
+- 对应平台的 WebView/编译依赖
+
+安装 Wails CLI：
+
+```bash
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
+wails doctor
+```
+
+启动开发模式：
+
+```bash
+npm --prefix frontend install
+wails dev
+```
+
+运行测试与生产构建：
+
+```bash
+go test -race ./...
+go vet ./...
+npm --prefix frontend run build
+wails build -clean
+```
+
+产物会出现在 `build/bin/`。桌面应用通常应在目标操作系统上分别构建：
+
+- macOS：`wails build -clean`
+- Windows：`wails build -clean -platform windows/amd64`
+- Linux：安装 WebKitGTK 等发行版依赖后执行 `wails build -clean`
+
+每次 Push 和 Pull Request 都会自动执行安全扫描、测试和跨平台打包，构建产物可从对应的 GitHub Actions 运行页面下载。推送 `v*` Tag 后会自动创建带校验和的 GitHub Release。
+
+## 安全边界
+
+- 只实现本地转发 `-L`；导入器拒绝远程转发 `-R`、动态代理 `-D`、`ProxyCommand` 和远程 shell 命令。
+- 不使用 `ssh.InsecureIgnoreHostKey`。
+- “记住凭据”是显式选择，不是默认行为。
+- 应用退出或停止隧道时关闭监听器、SSH 连接并清空该隧道持有的内存凭据。
+- TunnelDeck 不能替代服务器侧最小权限、SSH 防火墙、密钥轮换或 MFA。
+
+## 技术栈
+
+- Go
+- Wails 2
+- Vue 3 Composition API
+- Vite
+- `golang.org/x/crypto/ssh`
+- `github.com/zalando/go-keyring`
+
+## License
+
+[MIT](LICENSE)
